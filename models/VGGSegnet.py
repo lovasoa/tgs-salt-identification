@@ -3,7 +3,7 @@ from pathlib import Path
 import numpy as np
 from keras import Input, Model
 from keras.callbacks import ModelCheckpoint, ProgbarLogger
-from keras.layers import Conv2D, MaxPooling2D, Flatten, Dense, ZeroPadding2D, BatchNormalization, UpSampling2D, Reshape, \
+from keras.layers import Conv2D, MaxPooling2D, ZeroPadding2D, BatchNormalization, UpSampling2D, Reshape, \
     Activation
 from keras.utils import Sequence
 from scipy.misc import imread
@@ -12,7 +12,7 @@ from skimage.transform import resize
 
 class SaltImageSequence(Sequence):
 
-    def __init__(self, img_root: Path, batch_size: int = 50):
+    def __init__(self, img_root: Path, batch_size: int = 10):
         self.batch_size = batch_size
         self.img_root = img_root
         self.ids = [f.stem for f in (img_root / "images").glob("*png")]
@@ -31,7 +31,7 @@ class SaltImageSequence(Sequence):
 
     def read_mask(self, img_id: str) -> np.ndarray:
         img = self.img("images", img_id)  # 2d array
-        img_resized = resize(img, (96, 96))
+        img_resized = resize(img, (96, 96), mode='reflect', anti_aliasing=False)
         flat = img_resized.flatten().astype('float16') / 256
         return flat
 
@@ -61,42 +61,19 @@ def VGGSegnet(vgg_level=3):
     )(img_input)
     x = Conv2D(64, (3, 3), activation='relu', padding='same', name='block1_conv2', data_format='channels_first')(x)
     x = MaxPooling2D((2, 2), strides=(2, 2), name='block1_pool', data_format='channels_first')(x)
-    f1 = x
+
     # Block 2
     x = Conv2D(128, (3, 3), activation='relu', padding='same', name='block2_conv1', data_format='channels_first')(x)
     x = Conv2D(128, (3, 3), activation='relu', padding='same', name='block2_conv2', data_format='channels_first')(x)
     x = MaxPooling2D((2, 2), strides=(2, 2), name='block2_pool', data_format='channels_first')(x)
-    f2 = x
 
     # Block 3
     x = Conv2D(256, (3, 3), activation='relu', padding='same', name='block3_conv1', data_format='channels_first')(x)
     x = Conv2D(256, (3, 3), activation='relu', padding='same', name='block3_conv2', data_format='channels_first')(x)
     x = Conv2D(256, (3, 3), activation='relu', padding='same', name='block3_conv3', data_format='channels_first')(x)
     x = MaxPooling2D((2, 2), strides=(2, 2), name='block3_pool', data_format='channels_first')(x)
-    f3 = x
 
-    # Block 4
-    x = Conv2D(512, (3, 3), activation='relu', padding='same', name='block4_conv1', data_format='channels_first')(x)
-    x = Conv2D(512, (3, 3), activation='relu', padding='same', name='block4_conv2', data_format='channels_first')(x)
-    x = Conv2D(512, (3, 3), activation='relu', padding='same', name='block4_conv3', data_format='channels_first')(x)
-    x = MaxPooling2D((2, 2), strides=(2, 2), name='block4_pool', data_format='channels_first')(x)
-    f4 = x
-
-    # Block 5
-    x = Conv2D(512, (3, 3), activation='relu', padding='same', name='block5_conv1', data_format='channels_first')(x)
-    x = Conv2D(512, (3, 3), activation='relu', padding='same', name='block5_conv2', data_format='channels_first')(x)
-    x = Conv2D(512, (3, 3), activation='relu', padding='same', name='block5_conv3', data_format='channels_first')(x)
-    x = MaxPooling2D((2, 2), strides=(2, 2), name='block5_pool', data_format='channels_first')(x)
-    f5 = x
-
-    x = Flatten(name='flatten')(x)
-    x = Dense(4096, activation='relu', name='fc1')(x)
-    x = Dense(4096, activation='relu', name='fc2')(x)
-    x = Dense(1000, activation='softmax', name='predictions')(x)
-
-    levels = [f1, f2, f3, f4, f5]
-
-    o = levels[vgg_level]
+    o = x
 
     o = (ZeroPadding2D((1, 1), data_format='channels_first'))(o)
     o = (Conv2D(512, (3, 3), padding='valid', data_format='channels_first'))(o)
@@ -117,25 +94,13 @@ def VGGSegnet(vgg_level=3):
     o = (Conv2D(64, (3, 3), padding='valid', data_format='channels_first'))(o)
     o = (BatchNormalization())(o)
 
-    o = (UpSampling2D((2, 2), data_format='channels_first'))(o)
-    o = (ZeroPadding2D((1, 1), data_format='channels_first'))(o)
-    o = (Conv2D(64, (3, 3), padding='valid', data_format='channels_first'))(o)
-    o = (BatchNormalization())(o)
-
     o = Conv2D(1, (3, 3), padding='same', data_format='channels_first')(o)
 
-    o_shape = Model(img_input, o).output_shape
-    output_height = o_shape[2]
-    output_width = o_shape[3]
-    print(o_shape)
+    (batch_size, channels, output_height, output_width) = Model(img_input, o).output_shape
 
     o = (Reshape((output_height * output_width,)))(o)
     o = (Activation('softmax'))(o)
-    model = Model(img_input, o)
-    model.outputWidth = output_width
-    model.outputHeight = output_height
-
-    return model
+    return Model(img_input, o)
 
 
 img_root = Path(__file__).resolve().parents[2] / "tgs_data" / "train"
